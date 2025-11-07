@@ -10,10 +10,15 @@ const router = express.Router();
 const ADMIN_KEY = process.env.ADMIN_API_KEY;
 const CATBOX_HASH = process.env.CATBOX_USER_HASH;
 
+// --- CẤU HÌNH ĐỂ TRÁNH TIMEOUT ---
+const DEFAULT_PROXY_COUNT = 100; // Giảm số lượng mặc định
+const MAX_PROXY_COUNT = 200;     // Đặt giới hạn tối đa để đảm bảo không bị quá tải
+const PROXY_CHECK_TIMEOUT = 5000; // 5 giây timeout cho mỗi lần kiểm tra proxy
+
 // --- CÁC HÀM HỖ TRỢ ---
 
 /**
- * Lấy danh sách proxy từ ProxyScrape.
+ * Lấy và xáo trộn danh sách proxy từ ProxyScrape.
  */
 async function getProxyList() {
     try {
@@ -44,7 +49,7 @@ async function isProxyLive(proxy) {
                 port: parseInt(proxy.split(':')[1], 10),
                 protocol: 'http'
             },
-            timeout: 7000 // Tăng timeout lên một chút để có kết quả ổn định hơn
+            timeout: PROXY_CHECK_TIMEOUT
         });
         return true;
     } catch (error) {
@@ -77,45 +82,40 @@ async function uploadToCatbox(fileContent) {
         if (response.status === 200 && response.data) {
             return response.data;
         } else {
-            throw new Error(`Catbox API trả về status ${response.status} với nội dung: ${response.data}`);
+            throw new Error(`Catbox API trả về status ${response.status}`);
         }
     } catch (error) {
         console.error('Lỗi khi tải file lên Catbox:', error.message);
-        throw new Error(`Không thể tải file lên Catbox.me. Chi tiết: ${error.message}`);
+        throw new Error(`Không thể tải file lên Catbox.me.`);
     }
 }
 
 // --- CÁC ENDPOINTS CỦA API ---
 
 /**
- * Endpoint /: Hiển thị hướng dẫn sử dụng (trang chủ)
+ * Endpoint /: Hiển thị hướng dẫn sử dụng dưới dạng JSON
  */
 router.get('/', (req, res) => {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(`
-        <h1>API Tạo Proxy</h1>
-        <p>API này cung cấp proxy HTTP "sống" và tải chúng lên Catbox.me.</p>
-        <h2>Cách sử dụng:</h2>
-        <h3>Endpoint: <code>/proxy</code></h3>
-        <ul>
-            <li><strong>Phương thức:</strong> <code>GET</code></li>
-            <li><strong>Tham số (Query Parameters):</strong>
-                <ul>
-                    <li><code>count</code> (tùy chọn): Số lượng proxy sống bạn muốn nhận. Mặc định là 1000. Tối đa 2000.</li>
-                    <li><code>key</code> (bắt buộc): Khóa API để xác thực.</li>
-                </ul>
-            </li>
-        </ul>
-        <h3>Ví dụ:</h3>
-        <p><code>/proxy?count=200&key=your_secret_key</code></p>
-        <h3>Kết quả trả về (thành công):</h3>
-        <pre>{
-  "success": true,
-  "message": "Đã tìm thấy và tải lên 200 proxy sống.",
-  "proxy_count": 200,
-  "url": "https://files.catbox.moe/xxxxxx.txt"
-}</pre>
-    `);
+    res.json({
+        api_name: "Live Proxy Generator API",
+        description: "API tạo danh sách proxy sống và tải lên Catbox.me.",
+        endpoints: {
+            home: {
+                path: "/",
+                description: "Hiển thị hướng dẫn sử dụng này."
+            },
+            proxy: {
+                path: "/proxy",
+                method: "GET",
+                description: "Tạo và lấy link file chứa proxy sống.",
+                parameters: {
+                    count: `(Tùy chọn) Số lượng proxy muốn lấy. Mặc định: ${DEFAULT_PROXY_COUNT}. Tối đa: ${MAX_PROXY_COUNT}.`,
+                    key: "(Bắt buộc) Khóa API để xác thực."
+                },
+                example: `/proxy?count=50&key=your_secret_key`
+            }
+        }
+    });
 });
 
 /**
@@ -128,32 +128,33 @@ router.get('/proxy', async (req, res) => {
         return res.status(401).json({ success: false, message: 'Lỗi xác thực: API key không hợp lệ.' });
     }
 
-    let desiredCount = parseInt(count, 10) || 1000;
-    if (desiredCount > 2000) desiredCount = 2000; // Giới hạn số lượng để tránh timeout
+    let desiredCount = parseInt(count, 10) || DEFAULT_PROXY_COUNT;
+    if (desiredCount > MAX_PROXY_COUNT) {
+        desiredCount = MAX_PROXY_COUNT; // Áp dụng giới hạn tối đa
+    }
 
     try {
         const rawProxies = await getProxyList();
-        console.log(`Đã lấy được ${rawProxies.length} proxy thô. Bắt đầu tìm ${desiredCount} proxy sống...`);
+        console.log(`Đã lấy ${rawProxies.length} proxy thô. Bắt đầu tìm ${desiredCount} proxy sống...`);
 
         const liveProxies = [];
         // Tối ưu: Chỉ kiểm tra cho đến khi đủ số lượng yêu cầu
         for (const proxy of rawProxies) {
-            if (await isProxyLive(proxy)) {
-                liveProxies.push(proxy);
-                console.log(`Tìm thấy proxy sống: ${proxy} (${liveProxies.length}/${desiredCount})`);
-            }
             if (liveProxies.length >= desiredCount) {
                 console.log('Đã tìm đủ số lượng proxy sống yêu cầu.');
-                break; // Dừng lại khi đã đủ
+                break; // Dừng lại ngay khi đã đủ
+            }
+            if (await isProxyLive(proxy)) {
+                liveProxies.push(proxy);
             }
         }
 
         if (liveProxies.length === 0) {
-            return res.status(503).json({ success: false, message: 'Không tìm thấy proxy nào hoạt động tại thời điểm này.' });
+            return res.status(503).json({ success: false, message: 'Không tìm thấy proxy nào hoạt động tại thời điểm này. Vui lòng thử lại sau.' });
         }
 
         const fileContent = liveProxies.join('\n');
-        console.log('Đang tải file lên Catbox.me...');
+        console.log(`Tìm thấy ${liveProxies.length} proxy. Đang tải file lên Catbox.me...`);
         const catboxUrl = await uploadToCatbox(fileContent);
         console.log(`Tải lên thành công: ${catboxUrl}`);
 
@@ -170,7 +171,6 @@ router.get('/proxy', async (req, res) => {
     }
 });
 
-// Cấu hình để chạy trên Netlify với URL gọn hơn
-// Đường dẫn gốc '/' sẽ được xử lý bởi router này
-app.use('/', router);
+// Cấu hình để chạy trên Netlify
+app.use('/.netlify/functions/api', router);
 module.exports.handler = serverless(app);
