@@ -4,7 +4,6 @@
   functions = "netlify/functions"
 
 # Chuyển hướng tất cả các request đến function 'api'
-# Điều này cho phép bạn gọi /proxy thay vì /api/proxy
 [[redirects]]
   from = "/*"
   to = "/.netlify/functions/api/:splat"
