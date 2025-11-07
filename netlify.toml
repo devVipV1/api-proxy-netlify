@@ -1,11 +1,11 @@
 # netlify.toml
 
 [build]
-  # Thư mục chứa các serverless functions
   functions = "netlify/functions"
 
-# Chuyển hướng tất cả các request từ /api/* đến function 'api'
+# Chuyển hướng tất cả các request đến function 'api'
+# Điều này cho phép bạn gọi /proxy thay vì /api/proxy
 [[redirects]]
-  from = "/api/*"
+  from = "/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
