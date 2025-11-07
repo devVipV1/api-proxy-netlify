@@ -1,0 +1,11 @@
+# netlify.toml
+
+[build]
+  # Thư mục chứa các serverless functions
+  functions = "netlify/functions"
+
+# Chuyển hướng tất cả các request từ /api/* đến function 'api'
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
